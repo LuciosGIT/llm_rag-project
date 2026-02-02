@@ -3,8 +3,12 @@ import time
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 import os
+import logging
 
 load_dotenv()
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.debug = True
@@ -12,6 +16,14 @@ app.debug = True
 HF_API_URL = os.getenv('HF_API_URL')
 
 HF_API_TOKEN = os.getenv('HF_API_TOKEN')
+
+if not HF_API_URL:
+    logger.error("URL da API do Hugging Face não foi definida! Certifique-se de configurar a variável HF_API_URL.")
+    raise ValueError("HF_API_URL não pode estar vazia.")
+
+if not HF_API_TOKEN:
+    logger.error("Token da API do Hugging Face não foi definida! Certifique-se de configurar a variável HF_API_TOKEN.")
+    raise ValueError("HF_API_TOKEN não pode estar vazia.")
 
 
 def query_hf_api(user_query, retries=2, delay=5):
@@ -31,34 +43,45 @@ def query_hf_api(user_query, retries=2, delay=5):
     }
 
     for attempt in range(retries):
-        response = requests.post(
-            HF_API_URL,
-            headers=headers,
-            json=payload,
-            timeout=60
-        )
-
-        if response.status_code == 200:
+        try:
+            response = requests.post(
+                HF_API_URL,
+                headers=headers,
+                json=payload,
+                timeout=60
+            )
+            response.raise_for_status()
             return response.json()
 
-        print(f"Tentativa {attempt+1}/{retries} falhou: {response.text}")
-        time.sleep(delay)
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"Tentativa {attempt}/{retries} falhou: {e}")
+            time.sleep(delay)
 
-    response.raise_for_status()
+    logger.error("Falha ao obter resposta da API após múltiplas tentativas.")
+    return None
 
 
 @app.route("/chat", methods=["POST"])
 def chat():
-    data = request.get_json(silent=True) or {}
-    user_query = data.get("query", "").strip()
 
-    if not user_query:
-        return jsonify({"error": "Campo 'query' é obrigatório"}), 400
+    try: 
+        data = request.get_json(silent=True) or {}
+        user_query = data.get("query", "").strip()
 
-    hf_response = query_hf_api(user_query)
+        if not user_query:
+            return jsonify({"error": "Campo 'query' é obrigatório"}), 400
 
-    answer = hf_response["choices"][0]["message"]["content"].strip()
-    return jsonify({"response": answer})
+        hf_response = query_hf_api(user_query)
+
+        if hf_response is None:
+            return jsonify({"error": "O campo 'query' é obrigatório"}), 500
+
+        answer = hf_response["choices"][0]["message"]["content"].strip()
+        return jsonify({"response": answer})
+    
+    except Exception as e:
+        logger.exception("Error inesperado ao processar requisição.")
+        return jsonify({"error": "Erro interno no servidor"}), 500
 
 
 if __name__ == "__main__":

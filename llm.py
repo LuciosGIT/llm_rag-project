@@ -32,10 +32,19 @@ def query_hf_api(user_query, retries=2, delay=5):
         "Content-Type": "application/json"
     }
 
+    full_prompt =f"""
+                    Você é um assistente especializado em fornecer respostas diretas e concisas, evitando redundâncias.
+                    Seu objetivo é responder com precisão, usando informações relevantes e mantendo um tom profissional e neutro.
+                    Seja claro e objetivo, sem introduções ou conclusões desnecessárias.
+
+                    Pergunta do usuário: "{user_query}"
+                    Resposta:
+            """
+
     payload = {
         "model": "meta-llama/Llama-3.2-3B-Instruct",
         "messages": [
-            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "system", "content": full_prompt},
             {"role": "user", "content": user_query}
         ],
         "temperature": 0.2,
@@ -51,6 +60,7 @@ def query_hf_api(user_query, retries=2, delay=5):
                 timeout=60
             )
             response.raise_for_status()
+            logger.info(f"O prompt enviado pelo usuário foi: {full_prompt}")
             return response.json()
 
         except requests.exceptions.RequestException as e:
@@ -71,7 +81,10 @@ def chat():
         if not user_query:
             return jsonify({"error": "Campo 'query' é obrigatório"}), 400
 
+    
+
         hf_response = query_hf_api(user_query)
+
 
         if hf_response is None:
             return jsonify({"error": "O campo 'query' é obrigatório"}), 500

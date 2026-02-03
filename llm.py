@@ -4,6 +4,7 @@ from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 import os
 import logging
+import difflib
 
 load_dotenv()
 
@@ -17,6 +18,8 @@ HF_API_URL = os.getenv('HF_API_URL')
 
 HF_API_TOKEN = os.getenv('HF_API_TOKEN')
 
+LOCAL_KNOWLEDGE_DATABASE = "source.txt"
+
 if not HF_API_URL:
     logger.error("URL da API do Hugging Face não foi definida! Certifique-se de configurar a variável HF_API_URL.")
     raise ValueError("HF_API_URL não pode estar vazia.")
@@ -26,19 +29,75 @@ if not HF_API_TOKEN:
     raise ValueError("HF_API_TOKEN não pode estar vazia.")
 
 
+def load_local_knowledge():
+    """
+    Carrega a base de conhecimento local utilizada como fonte para RAG.
+    Returns:
+    list[str]: Lista de blocos de conhecimento extraídos do arquivo.
+
+    """
+    if not os.path.exists(LOCAL_KNOWLEDGE_DATABASE):
+        logger.warning("Arquivo de conhecimento local não encontrado. Continuando sem RAG")
+        return []
+    with open(LOCAL_KNOWLEDGE_DATABASE, "r", encoding="utf-8") as f:
+        return f.read().split("\n\n") #Divide em blocos de conhecimento
+    
+knowledge_base = load_local_knowledge()
+
+def retrieve_relevant_passage(query):
+    """
+    Recupera o trecho mais relevante da base de conhecimento local com base em similaridade textual.
+
+    Args:
+        query (str): Texto da consulta ou pergunta do usuário.
+
+    Returns:
+        str: Trecho de conhecimento mais relevante ou mensagem padrão
+        caso a base de conhecimento esteja vazia.
+
+    """
+    if not knowledge_base:
+        return "Nenhuma informação adicional disponível."
+    
+    best_match = max(knowledge_base, key = lambda passage: difflib.SequenceMatcher(None, query, passage).ratio())
+
+    return best_match
+
+
 def query_hf_api(user_query, retries=2, delay=5):
+    """
+    Envia uma consulta à API da Hugging Face utilizando um modelo LLM com
+    suporte a recuperação de contexto (RAG) a partir de uma base local.
+
+    Args:
+        user_query (str): Pergunta ou consulta enviada pelo usuário.
+        retries (int, optional): Número máximo de tentativas em caso de falha
+            na requisição. Padrão é 2.
+        delay (int, optional): Tempo de espera em segundos entre as tentativas.
+            Padrão é 5.
+
+    Returns:
+        dict | None: Resposta JSON retornada pela API da Hugging Face ou
+        None caso todas as tentativas falhem.
+    """
     headers = {
         "Authorization": f"Bearer {HF_API_TOKEN}",
         "Content-Type": "application/json"
     }
 
-    full_prompt =f"""
-                    Você é um assistente especializado em fornecer respostas diretas e concisas, evitando redundâncias.
-                    Seu objetivo é responder com precisão, usando informações relevantes e mantendo um tom profissional e neutro.
-                    Seja claro e objetivo, sem introduções ou conclusões desnecessárias.
+    relevant_context = retrieve_relevant_passage(user_query)
 
-                    Pergunta do usuário: "{user_query}"
-                    Resposta:
+    full_prompt =f""""
+                    [INSTRUÇÕES]
+                    Você é um assistente especializado em fornecer respostas diretas e consisas, evitando redundâncias. Sua resposta deve se basear no [CONHECIMENTO RELEVANTE] se houver.
+
+                    [CONHECIMENTO RELEVANTE]
+                    "{relevant_context}"
+
+                    [PERGUNTA DO USUÁRIO]
+                    "{user_query}"
+
+                    **Resposta:** [Sua resposta direta]
             """
 
     payload = {

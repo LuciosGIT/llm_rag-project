@@ -5,6 +5,11 @@ from dotenv import load_dotenv
 import os
 import logging
 import difflib
+import faiss
+from sentence_transformers import SentenceTransformer
+import numpy as np
+from retriever import FaissRetriever
+import re
 
 load_dotenv()
 
@@ -40,28 +45,20 @@ def load_local_knowledge():
         logger.warning("Arquivo de conhecimento local não encontrado. Continuando sem RAG")
         return []
     with open(LOCAL_KNOWLEDGE_DATABASE, "r", encoding="utf-8") as f:
-        return f.read().split("\n\n") #Divide em blocos de conhecimento
+        text = f.read()
+
+        chunks = re.split(r"(?=Art\. \d+º)", text)
+
+        chunks = [chunk.strip() for chunk in chunks if len(chunk.strip()) > 50]
+
+        logger.info(f"{len(chunks)} chunks carregados da base local.")
+        logger.info(chunks)
+
+        return chunks
     
 knowledge_base = load_local_knowledge()
 
-def retrieve_relevant_passage(query):
-    """
-    Recupera o trecho mais relevante da base de conhecimento local com base em similaridade textual.
-
-    Args:
-        query (str): Texto da consulta ou pergunta do usuário.
-
-    Returns:
-        str: Trecho de conhecimento mais relevante ou mensagem padrão
-        caso a base de conhecimento esteja vazia.
-
-    """
-    if not knowledge_base:
-        return "Nenhuma informação adicional disponível."
-    
-    best_match = max(knowledge_base, key = lambda passage: difflib.SequenceMatcher(None, query, passage).ratio())
-
-    return best_match
+retriever = FaissRetriever(knowledge_base)
 
 
 def query_hf_api(user_query, retries=2, delay=5):
@@ -85,7 +82,7 @@ def query_hf_api(user_query, retries=2, delay=5):
         "Content-Type": "application/json"
     }
 
-    relevant_context = retrieve_relevant_passage(user_query)
+    relevant_context = retriever.retrieve(user_query, k=3)
 
     full_prompt =f""""
                     [INSTRUÇÕES]
